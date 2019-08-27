@@ -798,7 +798,6 @@ static void gc_psx_command(struct gc_pad *pad, int b, unsigned char *data)
                 udelay(GC_PSX_DELAY);
         }
 
-        udelay(GC_PSX_DELAY2);
 }
 
 
@@ -814,7 +813,6 @@ static int gc_psx_wait_ack(void)
                 udelay(1);
                 if(!(GPIO_STATUS & GC_PSX_ACK))
                 {
-			printk("Got ACK\n");
                         udelay(GC_PSX_DELAY * 2); /* sleep for one clock cycle to let controller settle */
                         return 1;
                 }
@@ -832,10 +830,6 @@ static int gc_psx_read_pad(struct gc_pad *pad,
                                unsigned char data[GC_PSX_BYTES],
                                unsigned char *id)
 {
-	if(!(GPIO_STATUS & GC_PSX_ACK))
-	{
-		return 0; // ACK already low? something is not right.
-	}
         int i, max_len = 0;
         unsigned char data2 = 0;
 
@@ -986,12 +980,14 @@ static void gc_psx_process_packet(struct gc *gc)
 			local_irq_restore(flags);
 			if(rc) {
                                 gc_psx_con_present[i] = 1;
+	                        gc_psx_report_pad(pad, id, data);
+
                         }
                         else if(gc_psx_con_present[i]) {
                                 printk("gamecon: lost PSX controller on GPIO%d", gc_gpio_ids[i]);
                                 gc_psx_con_present[i] = 0;
                         }
-                        gc_psx_report_pad(pad, id, data);
+
                 }
         }
 }
