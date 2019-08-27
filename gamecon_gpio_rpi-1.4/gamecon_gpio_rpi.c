@@ -107,12 +107,12 @@ bool timeval_lt(const struct timeval *a, const struct timeval *b)
 void delayMicrosecondsHard (unsigned int howLong)
 {
     struct timeval tNow, tLong, tEnd ;
-    
+
     do_gettimeofday (&tNow) ;
     tLong.tv_sec  = howLong / 1000000 ;
     tLong.tv_usec = howLong % 1000000 ;
     timevaladd (&tEnd, &tNow, &tLong) ;
-    
+
     while (timeval_lt (&tNow, &tEnd))
         do_gettimeofday (&tNow) ;
 }
@@ -192,14 +192,15 @@ enum pad_gpios {
 enum common_gpios {
 	NES_CLOCK_GPIO = 10,
 	NES_LATCH_GPIO = 11,
-	PSX_COMMAND_GPIO = 14,
-	PSX_SELECT_GPIO = 15,
-	PSX_CLOCK_GPIO = 18
+	PSX_DATA_GPIO = 14,
+	PSX_CMD_GPIO = 15,
+	PSX_CLOCK_GPIO = 18,
+	PSX_ACK_GPIO = 23
 };
 
 static const int gc_gpio_ids[] = { PAD1_GPIO, PAD2_GPIO, PAD3_GPIO, PAD4_GPIO, PAD5_GPIO, PAD6_GPIO };
 static const unsigned long gc_status_bit[] = { 	(1<<PAD1_GPIO),
-												(1<<PAD2_GPIO),
+										(1<<PAD2_GPIO),
 												(1<<PAD3_GPIO),
 												(1<<PAD4_GPIO),
 												(1<<PAD5_GPIO),
@@ -242,21 +243,21 @@ struct gc_nin_gpio n64_prop = { GC_N64,
 static inline void gc_n64_send_command(struct gc_nin_gpio *ningpio)
 {
 	int i;
-	
+
 	/* set correct GPIOs to outputs */
 	*gpio &= ~ningpio->cmd_setinputs;
 	*gpio |= ningpio->cmd_setoutputs;
-    
+
 /* if we keep this ratio of 1:3 and 3:1, then widening out our period 
    by scaling the delays seems to help when one of our delays waits an extra 1-2us 
- 
+
    if our small delay ends up being close to as long as our long delay, it's a problem
    if we try to delay 1us, adding an extra 2us really confuses the protocol because the bit becomes 3us:3us
- 
+
    if we widen it out to 2us:6us, adding an extra 2us is still 4us:6us and the controller accepts this
  */
 #define N64_DELAY_SCALE 3 /* tested up to 10 (official N64 controller) */
-	
+
 	/* transmit a data request to pads */
 	for (i = 0; i < ningpio->request_len; i++) {
 		if ((unsigned)((ningpio->request >> i) & 1) == 0) {
@@ -271,12 +272,12 @@ static inline void gc_n64_send_command(struct gc_nin_gpio *ningpio)
 			delayMicrosecondsHard(3*N64_DELAY_SCALE);
 		}
 	}
-	
+
 	/* send stop bit (let pull-up handle the last 2us)*/
 	GPIO_CLR = ningpio->valid_bits;
 	delayMicrosecondsHard(1);
 	GPIO_SET = ningpio->valid_bits;
-	
+
 	/* set the GPIOs back to inputs */
 	*gpio &= ~ningpio->cmd_setinputs;
 }
@@ -293,19 +294,19 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 	unsigned prev, mindiff=1000, maxdiff=0;
 	unsigned long flags;
 	static unsigned long samplebuf[6500]; // =max(GC_N64_BUFSIZE, GC_GCUBE_BUFSIZE)
-	
+
 	/* disable interrupts */
 	local_irq_save(flags);
 
 	gc_n64_send_command(ningpio);
-	
+
 	/* start sampling data */
 	for (i = 0; i < ningpio->response_bufsize; i++)
 		samplebuf[i] = GPIO_STATUS & ningpio->valid_bits;
-	
+
 	/* enable interrupts when done */
 	local_irq_restore(flags);
-	
+
 	memset(data, 0x00, ningpio->response_len);
 
 	/* extract correct bit sequence (for each pad) from sampled data */
@@ -318,10 +319,10 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 			if ((samplebuf[i] & gc_status_bit[k]) == 0)
 				break;
 		}
-		
+
 		prev = i;
 		j = 0;
-		
+
 		while (j < ningpio->response_len-1 && i < ningpio->response_bufsize-1) {
 			i++;
 			/* detect consecutive falling edges */
@@ -338,7 +339,7 @@ static void gc_n64_read_packet(struct gc *gc, struct gc_nin_gpio *ningpio, unsig
 				prev = i;
 			}
 		}
-		
+
 		/* ignore the real stop-bit as it seems to be 0 at times. Invalidate
 		 * the read manually instead, if either of the following is true:
 		 * 		1. Less than response_len-1 bits read detected from samplebuf
@@ -504,7 +505,7 @@ static void gc_gcube_process_packet(struct gc *gc)
 				if (data[55 - j] & s)
 					y3 |= 1 << j;
 				if (data[63 - j] & s)
-					y4 |= 1 << j;					
+					y4 |= 1 << j;
 			}
 
 			input_report_abs(dev, ABS_X, x);
@@ -512,8 +513,8 @@ static void gc_gcube_process_packet(struct gc *gc)
 			input_report_abs(dev, ABS_RX, x2);
 			input_report_abs(dev, ABS_RY, 0xff - y2);
 			input_report_abs(dev, ABS_GAS, y3);
-			input_report_abs(dev, ABS_BRAKE, y4);			
-			
+			input_report_abs(dev, ABS_BRAKE, y4);
+
 			input_report_abs(dev, ABS_HAT0X,
 					 !(s & data[15]) - !(s & data[14]));
 			input_report_abs(dev, ABS_HAT0Y,
@@ -661,7 +662,7 @@ static void gc_nes_process_packet(struct gc *gc)
 				input_sync(dev);
 			}
 			break;
-				
+
 		case GC_NESFOURSCORE:
 			/*
 			 * The NES Four Score uses a 24 bit protocol in 4-player mode
@@ -673,17 +674,17 @@ static void gc_nes_process_packet(struct gc *gc)
 			 * adapter is connected and if the switch is positioned in
 			 * 4 player mode.
 			 */
-			
+
 			dev2 = pad->dev2;
-				
+
 			/* Report first byte (first NES pad). */
 			input_report_abs(dev, ABS_X, !(s & data[6]) - !(s & data[7]));
 			input_report_abs(dev, ABS_Y, !(s & data[4]) - !(s & data[5]));
-			
+
 			for (j = 0; j < 4; j++)
 				input_report_key(dev, gc_snes_btn[j], s & data[gc_nes_bytes[j]]);
 			input_sync(dev);
-			
+
 			/* Determine if a NES Four Score ID code is available in the 3rd byte. */
 			fs_connected = ( !(s & data[16]) &&	!(s & data[17]) && !(s & data[18]) &&
 							  (s & data[19]) &&	!(s & data[20]) && !(s & data[21]) &&
@@ -691,36 +692,36 @@ static void gc_nes_process_packet(struct gc *gc)
 								( !(s & data[16]) && !(s & data[17]) &&  (s & data[18]) &&
 								  !(s & data[19]) && !(s & data[20]) && !(s & data[21]) &&
 								  !(s & data[22]) && !(s & data[23]) );
-			
+
 			/* Check if the NES Four Score is connected and the toggle switch is set to 4-player mdoe. */
 			if(fs_connected) {
 				if(pad->player_mode == 2)
 					pad->player_mode = 4;
-				
+
 				/* Report second byte (second NES pad). */
 				input_report_abs(dev2, ABS_X, !(s & data[14]) - !(s & data[15]));
 				input_report_abs(dev2, ABS_Y, !(s & data[12]) - !(s & data[13]));
-				
+
 				for (j = 0; j < 4; j++) {
 					input_report_key(dev2, gc_snes_btn[j], s & data[gc_nes_bytes[j] + 8]);
 				}
 				input_sync(dev2);
-				
+
 			} else if(pad->player_mode == 4) {
 				/* Either the toggle switch on the NES Four Score is set to 2-player mode or it is not connected.  */
 				pad->player_mode = 2;
-				
+
 				/* Clear second NES pad. */
 				input_report_abs(dev2, ABS_X, 0);
 				input_report_abs(dev2, ABS_Y, 0);
-				
+
 				for (j = 0; j < 4; j++) {
 					input_report_key(dev2, gc_snes_btn[j], 0);
 				}
 				input_sync(dev2);
 			}
 			break;
-			
+
 		default:
 			break;
 		}
@@ -748,8 +749,11 @@ static void gc_nes_process_packet(struct gc *gc)
 #define GC_PSX_RUMBLE	7		/* Rumble in Red mode */
 
 #define GC_PSX_CLOCK	(1<<PSX_CLOCK_GPIO)
-#define GC_PSX_COMMAND	(1<<PSX_COMMAND_GPIO)
-#define GC_PSX_SELECT	(1<<PSX_SELECT_GPIO)
+#define GC_PSX_COMMAND	(1<<PSX_CMD_GPIO)
+#define GC_PSX_DATA	(1<<PSX_DATA_GPIO)
+#define GC_PSX_ACK	(1<<PSX_ACK_GPIO)
+
+#define GC_PSX_ACK_OR_DIE if(!gc_psx_wait_ack()) { GPIO_SET = GC_PSX_CLOCK | dataPin; udelay(40); return 0; }
 
 #define GC_PSX_ID(x)	((x) >> 4)	/* High nibble is device type */
 #define GC_PSX_LEN(x)	(((x) & 0xf) << 1)	/* Low nibble is length in bytes/2 */
@@ -763,43 +767,197 @@ static const short gc_psx_btn[] = {
 };
 static const short gc_psx_ddr_btn[] = { BTN_0, BTN_1, BTN_2, BTN_3 };
 
+static int gc_psx_con_present[GC_MAX_DEVICES] = { 1, 1, 1, 1, 1, 1 };
+
 /*
  * gc_psx_command() writes 8bit command and reads 8bit data from
  * the psx pad.
  */
 
-static void gc_psx_command(struct gc *gc, int b, unsigned char *data)
+static void gc_psx_command(struct gc_pad *pad, int b, unsigned char *data)
 {
-	int i, j;
-	unsigned long read;
+        int i, j;
+        unsigned long read;
+	*data = 0;
+        //memset(data, 0, GC_MAX_DEVICES);
 
-	memset(data, 0, GC_MAX_DEVICES);
+        for (i = 0; i < GC_PSX_LENGTH; i++, b >>= 1) {
 
-	for (i = 0; i < GC_PSX_LENGTH; i++, b >>= 1) {
-		
-		GPIO_CLR = GC_PSX_CLOCK;
+                GPIO_CLR = GC_PSX_CLOCK;
 
-		if (b & 1)
-			GPIO_SET = GC_PSX_COMMAND;
-		else
-			GPIO_CLR = GC_PSX_COMMAND;
+                if (b & 1)
+                        GPIO_SET = GC_PSX_COMMAND;
+                else
+                        GPIO_CLR = GC_PSX_COMMAND;
 
-		udelay(GC_PSX_DELAY);
-		GPIO_SET = GC_PSX_CLOCK;
+                udelay(GC_PSX_DELAY);
+                GPIO_SET = GC_PSX_CLOCK;
 
-		read = GPIO_STATUS;
+                if(GPIO_STATUS & GC_PSX_DATA) *data |= (1 << i);
 
-		for (j = 0; j < GC_MAX_DEVICES; j++) {
-			struct gc_pad *pad = &gc->pads[j];
+                udelay(GC_PSX_DELAY);
+        }
 
-			if (pad->type == GC_PSX || pad->type == GC_DDR)
-				data[j] |= (read & gc_status_bit[j]) ? (1 << i) : 0;
-		}
+        udelay(GC_PSX_DELAY2);
+}
 
-		udelay(GC_PSX_DELAY);
+
+/*
+ * gc_psx_wait_ack() waits for ACK pin to go low, signaling a controller has acknowledged a data transmission.
+ *  if ACK does not go low within ~50us, function returns non-zero, signaling the controller is not present.
+ */
+static int gc_psx_wait_ack(void)
+{
+        int i;
+        for(i = 0; i < 50; i++)
+        {
+                udelay(1);
+                if(!(GPIO_STATUS & GC_PSX_ACK))
+                {
+			printk("Got ACK\n");
+                        udelay(GC_PSX_DELAY * 2); /* sleep for one clock cycle to let controller settle */
+                        return 1;
+                }
+        }
+        return 0;
+}
+
+/*
+ * gc_psx_read_pad() attempts to read data from a pad and set id to the received pad id.
+ *  if the controller never sends ACK, the function returns non-zero, signaling no controller data recvd.
+ */
+
+static int gc_psx_read_pad(struct gc_pad *pad,
+                               int dataPin,
+                               unsigned char data[GC_PSX_BYTES],
+                               unsigned char *id)
+{
+	if(!(GPIO_STATUS & GC_PSX_ACK))
+	{
+		return 0; // ACK already low? something is not right.
 	}
-	
-	udelay(GC_PSX_DELAY2);
+        int i, max_len = 0;
+        unsigned char data2 = 0;
+
+        /* Ensure clock is high */
+        GPIO_SET = GC_PSX_CLOCK;
+
+        /* Pull ATT line low, wake up controllers */
+        GPIO_CLR = dataPin;
+        udelay(GC_PSX_DELAY2);
+
+        gc_psx_command(pad, 0x01, &data2);      /* Access pad */
+        GC_PSX_ACK_OR_DIE;
+
+        gc_psx_command(pad, 0x42, id);          /* Get device ids */
+        GC_PSX_ACK_OR_DIE;
+
+        gc_psx_command(pad, 0, &data2);         /* Dump status */
+        GC_PSX_ACK_OR_DIE;
+
+        if (pad->type == GC_PSX || pad->type == GC_DDR) {
+                max_len = GC_PSX_LEN(*id);
+        }
+
+        /* Read in all the data */
+        for (i = 0; i < max_len; i++) {
+
+                gc_psx_command(pad, 0, &data2);
+
+                if(i < (max_len - 1)) {
+                        GC_PSX_ACK_OR_DIE;
+                }
+
+                data[i] = data2;
+        }
+
+        GPIO_SET = GC_PSX_CLOCK | dataPin;
+
+        /* Set id to the real value */
+        *id = GC_PSX_ID(*id);
+
+        return 1;
+}
+
+static void gc_psx_report_pad(struct gc_pad *pad, unsigned char psx_type,
+                              unsigned char *data)
+{
+        struct input_dev *dev = pad->dev;
+        int i;
+
+        switch (psx_type) {
+
+        case GC_PSX_RUMBLE:
+
+                input_report_key(dev, BTN_THUMBL, ~data[0] & 0x02);
+                input_report_key(dev, BTN_THUMBR, ~data[0] & 0x04);
+
+        case GC_PSX_NEGCON:
+        case GC_PSX_ANALOG:
+
+                if (pad->type == GC_DDR) {
+                        for (i = 0; i < 4; i++)
+                                input_report_key(dev, gc_psx_ddr_btn[i],
+                                                 ~data[0] & (0x10 << i));
+                } else {
+                        for (i = 0; i < 4; i++)
+                                input_report_abs(dev, gc_psx_abs[i + 2],
+                                                 data[i + 2]);
+
+                        input_report_abs(dev, ABS_HAT0X,
+                                !(data[0] & 0x20) - !(data[0] & 0x80));
+                        input_report_abs(dev, ABS_HAT0Y,
+                                !(data[0] & 0x40) - !(data[0] & 0x10));
+                }
+
+                for (i = 0; i < 8; i++)
+                        input_report_key(dev, gc_psx_btn[i], ~data[1] & (1 << i));
+
+                input_report_key(dev, BTN_START,  ~data[0] & 0x08);
+                input_report_key(dev, BTN_SELECT, ~data[0] & 0x01);
+
+                input_sync(dev);
+
+                break;
+
+        case GC_PSX_NORMAL:
+
+                if (pad->type == GC_DDR) {
+                        for (i = 0; i < 4; i++)
+                                input_report_key(dev, gc_psx_ddr_btn[i],
+                                                 ~data[0] & (0x10 << i));
+                } else {
+                        input_report_abs(dev, ABS_HAT0X,
+                                !(data[0] & 0x20) - !(data[0] & 0x80));
+                        input_report_abs(dev, ABS_HAT0Y,
+                                !(data[0] & 0x40) - !(data[0] & 0x10));
+
+                        /*
+                         * For some reason if the extra axes are left unset
+                         * they drift.
+             */
+                        for (i = 0; i < 4; i++)
+                input_report_abs(dev, gc_psx_abs[i + 2], 128);
+                         /* This needs to be debugged properly,
+                         * maybe fuzz processing needs to be done
+                         * in input_sync()
+                         *                               --vojtech
+                         */
+                }
+
+                for (i = 0; i < 8; i++)
+                        input_report_key(dev, gc_psx_btn[i], ~data[1] & (1 << i));
+
+                input_report_key(dev, BTN_START,  ~data[0] & 0x08);
+                input_report_key(dev, BTN_SELECT, ~data[0] & 0x01);
+
+                input_sync(dev);
+
+                break;
+
+        default: /* not a pad, ignore */
+                break;
+        }
 }
 
 /*
@@ -807,149 +965,35 @@ static void gc_psx_command(struct gc *gc, int b, unsigned char *data)
  * device identifier code.
  */
 
-static void gc_psx_read_packet(struct gc *gc,
-				   unsigned char data[GC_MAX_DEVICES][GC_PSX_BYTES],
-				   unsigned char id[GC_MAX_DEVICES])
-{
-	int i, j, max_len = 0;
-	unsigned long flags;
-	unsigned char data2[GC_MAX_DEVICES];
-
-	local_irq_save(flags);
-
-	/* Select pad */
-	GPIO_SET = GC_PSX_CLOCK | GC_PSX_SELECT;
-	
-	/* Deselect, begin command */
-	GPIO_CLR = GC_PSX_SELECT;
-	udelay(GC_PSX_DELAY2);
-
-	gc_psx_command(gc, 0x01, data2);	/* Access pad */
-	gc_psx_command(gc, 0x42, id);		/* Get device ids */
-	gc_psx_command(gc, 0, data2);		/* Dump status */
-
-	/* Find the longest pad */
-	for (i = 0; i < GC_MAX_DEVICES; i++) {
-		struct gc_pad *pad = &gc->pads[i];
-
-		if ((pad->type == GC_PSX || pad->type == GC_DDR) &&
-			GC_PSX_LEN(id[i]) > max_len &&
-			GC_PSX_LEN(id[i]) <= GC_PSX_BYTES) {
-			max_len = GC_PSX_LEN(id[i]);
-		}
-	}
-
-	/* Read in all the data */
-	for (i = 0; i < max_len; i++) {
-		gc_psx_command(gc, 0, data2);
-		for (j = 0; j < GC_MAX_DEVICES; j++)
-			data[j][i] = data2[j];
-	}
-
-	local_irq_restore(flags);
-
-	GPIO_SET = GC_PSX_CLOCK | GC_PSX_SELECT;
-
-	/* Set id's to the real value */
-	for (i = 0; i < GC_MAX_DEVICES; i++)
-		id[i] = GC_PSX_ID(id[i]);
-}
-
-static void gc_psx_report_one(struct gc_pad *pad, unsigned char psx_type,
-				  unsigned char *data)
-{
-	struct input_dev *dev = pad->dev;
-	int i;
-
-	switch (psx_type) {
-
-	case GC_PSX_RUMBLE:
-
-		input_report_key(dev, BTN_THUMBL, ~data[0] & 0x02);
-		input_report_key(dev, BTN_THUMBR, ~data[0] & 0x04);
-
-	case GC_PSX_NEGCON:
-	case GC_PSX_ANALOG:
-
-		if (pad->type == GC_DDR) {
-			for (i = 0; i < 4; i++)
-				input_report_key(dev, gc_psx_ddr_btn[i],
-						 ~data[0] & (0x10 << i));
-		} else {
-			for (i = 0; i < 4; i++)
-				input_report_abs(dev, gc_psx_abs[i + 2],
-						 data[i + 2]);
-
-			input_report_abs(dev, ABS_HAT0X,
-				!(data[0] & 0x20) - !(data[0] & 0x80));
-			input_report_abs(dev, ABS_HAT0Y,
-				!(data[0] & 0x40) - !(data[0] & 0x10));
-		}
-
-		for (i = 0; i < 8; i++)
-			input_report_key(dev, gc_psx_btn[i], ~data[1] & (1 << i));
-
-		input_report_key(dev, BTN_START,  ~data[0] & 0x08);
-		input_report_key(dev, BTN_SELECT, ~data[0] & 0x01);
-
-		input_sync(dev);
-
-		break;
-
-	case GC_PSX_NORMAL:
-
-		if (pad->type == GC_DDR) {
-			for (i = 0; i < 4; i++)
-				input_report_key(dev, gc_psx_ddr_btn[i],
-						 ~data[0] & (0x10 << i));
-		} else {
-			input_report_abs(dev, ABS_HAT0X,
-				!(data[0] & 0x20) - !(data[0] & 0x80));
-			input_report_abs(dev, ABS_HAT0Y,
-				!(data[0] & 0x40) - !(data[0] & 0x10));
-
-			/*
-			 * For some reason if the extra axes are left unset
-			 * they drift.
-			 */
-			for (i = 0; i < 4; i++)
-				input_report_abs(dev, gc_psx_abs[i + 2], 128);
-			 /* This needs to be debugged properly,
-			 * maybe fuzz processing needs to be done
-			 * in input_sync()
-			 *				 --vojtech
-			 */
-		}
-
-		for (i = 0; i < 8; i++)
-			input_report_key(dev, gc_psx_btn[i], ~data[1] & (1 << i));
-
-		input_report_key(dev, BTN_START,  ~data[0] & 0x08);
-		input_report_key(dev, BTN_SELECT, ~data[0] & 0x01);
-
-		input_sync(dev);
-
-		break;
-
-	default: /* not a pad, ignore */
-		break;
-	}
-}
-
 static void gc_psx_process_packet(struct gc *gc)
 {
-	unsigned char data[GC_MAX_DEVICES][GC_PSX_BYTES];
-	unsigned char id[GC_MAX_DEVICES];
-	struct gc_pad *pad;
-	int i;
+        unsigned char data[GC_PSX_BYTES];
+        unsigned char id;
+        struct gc_pad *pad;
+        int i;
+	int rc;
+        unsigned long flags;
 
-	gc_psx_read_packet(gc, data, id);
+        for (i = 0; i < GC_MAX_DEVICES; i++) {
 
-	for (i = 0; i < GC_MAX_DEVICES; i++) {
-		pad = &gc->pads[i];
-		if (pad->type == GC_PSX || pad->type == GC_DDR)
-			gc_psx_report_one(pad, id[i], data[i]);
-	}
+                pad = &gc->pads[i];
+                if(pad->type == GC_PSX || pad->type == GC_DDR)
+                {
+        		local_irq_save(flags);
+
+                        rc = gc_psx_read_pad(pad, gc_status_bit[i], data, &id);
+
+			local_irq_restore(flags);
+			if(rc) {
+                                gc_psx_con_present[i] = 1;
+                        }
+                        else if(gc_psx_con_present[i]) {
+                                printk("gamecon: lost PSX controller on GPIO%d", gc_gpio_ids[i]);
+                                gc_psx_con_present[i] = 0;
+                        }
+                        gc_psx_report_pad(pad, id, data);
+                }
+        }
 }
 
 /*
@@ -972,10 +1016,10 @@ static void gc_timer(unsigned long private)
 
 	if (gc->pad_count[GC_N64])
 		gc_n64_process_packet(gc);
-		
+
 	if (gc->pad_count[GC_GCUBE])
 		gc_gcube_process_packet(gc);
-		
+
 /*
  * NES and SNES pads or mouse
  */
@@ -986,7 +1030,7 @@ static void gc_timer(unsigned long private)
 		gc->pad_count[GC_NESFOURSCORE]) {
 		gc_nes_process_packet(gc);
 	}
-	
+
 /*
  * PSX controllers
  */
@@ -1089,14 +1133,14 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 			pr_warning("Failed to initiate rumble for N64 device %d\n", idx);
 			goto err_free_dev;
 		}*/
-		
+
 		/* create bitvectors read/write operations */
 		n64_prop.cmd_setinputs |= (7<<(gc_gpio_ids[idx]*3));
 		n64_prop.cmd_setoutputs |= (1<<(gc_gpio_ids[idx]*3));
 		n64_prop.valid_bits |= gc_status_bit[idx];
 
 		break;
-		
+
 	case GC_GCUBE:
 		for (i = 0; i < 8; i++)
 			__set_bit(gc_gcube_btn[i], input_dev->keybit);
@@ -1114,7 +1158,7 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 		gcube_prop.valid_bits |= gc_status_bit[idx];
 
 		break;
-		
+
 	case GC_SNESMOUSE:
 		__set_bit(BTN_LEFT, input_dev->keybit);
 		__set_bit(BTN_RIGHT, input_dev->keybit);
@@ -1138,28 +1182,28 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 			return -ENOMEM;
 		}
 		snprintf(pad->phys2, sizeof(pad->phys2), "input%d_2", idx);
-		
+
 		input_dev2->name = gc_names[pad_type];
 		input_dev2->phys = pad->phys2;
 		input_dev2->id.bustype = BUS_PARPORT;
 		input_dev2->id.vendor = 0x0001;
 		input_dev2->id.product = pad_type;
 		input_dev2->id.version = 0x0100;
-		
+
 		input_set_drvdata(input_dev2, gc);
-		
+
 		input_dev2->open = gc_open;
 		input_dev2->close = gc_close;
-		
+
 		input_dev2->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
-		
+
 		for (i = 0; i < 2; i++)
 			input_set_abs_params(input_dev2, ABS_X + i, -1, 1, 0, 0);
-		
+
 		pad->player_mode = 2;
-		
+
 		gc->pad_count[pad_type]++;
-		
+
 		for (i = 0; i < 4; i++) {
 			__set_bit(gc_snes_btn[i], input_dev->keybit);
 			__set_bit(gc_snes_btn[i], input_dev2->keybit);
@@ -1190,7 +1234,7 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 	err = input_register_device(pad->dev);
 	if (err)
 		goto err_free_dev;
-		
+
 	if(pad_type == GC_NESFOURSCORE) {
 		err = input_register_device(pad->dev2);
 		if(err)
@@ -1199,7 +1243,13 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 
 	/* set data pin to input */
 	*(gpio+(gc_gpio_ids[idx]/10)) &= ~(7<<((gc_gpio_ids[idx]%10)*3));
-	
+
+        if(pad_type == GC_PSX)
+        {
+                /* set controller pin to output */
+                *(gpio+(gc_gpio_ids[idx]/10)) |= (1<<((gc_gpio_ids[idx]%10)*3));
+        }
+
 	/* enable pull-up on GPIO4 or higher */
 	if (gc_gpio_ids[idx] >= 4) {
 		*(gpio+37) = 0x02;
@@ -1209,8 +1259,8 @@ static int __init gc_setup_pad(struct gc *gc, int idx, int pad_type)
 		*(gpio+37) = 0x00;
 		*(gpio+38) = 0x00;
 	}
-		
-	printk("GPIO%d configured for %s data pin\n", gc_gpio_ids[idx], gc_names[pad_type]);
+
+	printk("GPIO%d configured for %s data pin v1.5\n", gc_gpio_ids[idx], gc_names[pad_type]);
 
 	return 0;
 
@@ -1279,10 +1329,13 @@ static struct gc __init *gc_probe(int *pads, int n_pads)
 		/* set clk, cmd & sel pins to OUTPUT */
 		*(gpio+(PSX_CLOCK_GPIO/10)) &= ~(7<<((PSX_CLOCK_GPIO%10)*3));
 		*(gpio+(PSX_CLOCK_GPIO/10)) |= (1<<((PSX_CLOCK_GPIO%10)*3));
-		*(gpio+(PSX_COMMAND_GPIO/10)) &= ~(7<<((PSX_COMMAND_GPIO%10)*3));
-		*(gpio+(PSX_COMMAND_GPIO/10)) |= (1<<((PSX_COMMAND_GPIO%10)*3));
-		*(gpio+(PSX_SELECT_GPIO/10)) &= ~(7<<((PSX_SELECT_GPIO%10)*3));
-		*(gpio+(PSX_SELECT_GPIO/10)) |= (1<<((PSX_SELECT_GPIO%10)*3));
+
+		*(gpio+(PSX_CMD_GPIO/10)) &= ~(7<<((PSX_CMD_GPIO%10)*3));
+		*(gpio+(PSX_CMD_GPIO/10)) |= (1<<((PSX_CMD_GPIO%10)*3));
+
+		*(gpio+(PSX_ACK_GPIO/10)) &= ~(7<<((PSX_ACK_GPIO%10)*3));
+
+		*(gpio+(PSX_DATA_GPIO/10)) &= ~(7<<((PSX_DATA_GPIO%10)*3));
 	}
 
 	return gc;
